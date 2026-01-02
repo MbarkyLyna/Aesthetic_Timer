@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#9333ea">
     <title>Aesthetic Timer</title>
+    <link rel="manifest" href="manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
@@ -18,10 +20,46 @@
             background-attachment: fixed;
             filter: brightness(0.85);
         }
+        .time-picker {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .time-select {
+            width: 70px;
+            padding: 0.5rem;
+            border-radius: 0.75rem;
+            border: 1px solid #e9d5ff;
+            background: white;
+            text-align: center;
+            font-size: 1rem;
+        }
+        #pip-video {
+            position: fixed;
+            top: -9999px;
+            left: -9999px;
+            width: 320px;
+            height: 180px;
+        }
+        .pip-content {
+            width: 320px;
+            height: 180px;
+            background: linear-gradient(135deg, #9333ea 0%, #ec4899 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
     </style>
 </head>
 <body>
     <div id="app"></div>
+    
+    <!-- Hidden video element for Picture-in-Picture -->
+    <video id="pip-video" muted playsinline></video>
+    <canvas id="pip-canvas" style="display: none;"></canvas>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -39,6 +77,32 @@
             const [isRestPhase, setIsRestPhase] = useState(false);
             const [timeLeft, setTimeLeft] = useState(60);
             const [completedCycles, setCompletedCycles] = useState(0);
+            const [isPiPActive, setIsPiPActive] = useState(false);
+            
+            const videoRef = useRef(null);
+            const canvasRef = useRef(null);
+            const pipIntervalRef = useRef(null);
+
+            useEffect(() => {
+                videoRef.current = document.getElementById('pip-video');
+                canvasRef.current = document.getElementById('pip-canvas');
+                
+                // Register service worker for PWA
+                if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.register('/sw.js').catch(() => {});
+                }
+
+                // Check if PiP is supported
+                if (!document.pictureInPictureEnabled) {
+                    console.log('Picture-in-Picture not supported');
+                }
+
+                return () => {
+                    if (pipIntervalRef.current) {
+                        clearInterval(pipIntervalRef.current);
+                    }
+                };
+            }, []);
 
             useEffect(() => {
                 let timer;
@@ -68,6 +132,94 @@
                 }
                 return () => clearInterval(timer);
             }, [isRunning, timeLeft, isRestPhase, currentIntervalIndex, intervals]);
+
+            useEffect(() => {
+                if (isPiPActive) {
+                    updatePiPCanvas();
+                }
+            }, [timeLeft, isRestPhase, isPiPActive]);
+
+            const updatePiPCanvas = () => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                
+                const ctx = canvas.getContext('2d');
+                canvas.width = 320;
+                canvas.height = 180;
+
+                // Clear canvas first
+                ctx.clearRect(0, 0, 320, 180);
+
+                // Background gradient
+                const gradient = ctx.createLinearGradient(0, 0, 320, 180);
+                gradient.addColorStop(0, '#9333ea');
+                gradient.addColorStop(1, '#ec4899');
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, 320, 180);
+
+                // Phase text
+                ctx.fillStyle = 'white';
+                ctx.font = '16px Arial';
+                ctx.textAlign = 'center';
+                const phaseText = isRestPhase ? 'Rest Phase' : 'Work Phase';
+                ctx.fillText(phaseText, 160, 50);
+
+                // Timer
+                ctx.font = 'bold 48px Arial';
+                const mins = Math.floor(timeLeft / 60);
+                const secs = timeLeft % 60;
+                ctx.fillText(`${mins}:${secs.toString().padStart(2, '0')}`, 160, 110);
+
+                // Interval info
+                ctx.font = '14px Arial';
+                ctx.fillText(`Interval ${currentIntervalIndex + 1} of ${intervals.length}`, 160, 140);
+            };
+
+            const togglePiP = async () => {
+                if (!document.pictureInPictureEnabled) {
+                    alert('Picture-in-Picture is not supported on this device');
+                    return;
+                }
+
+                try {
+                    if (document.pictureInPictureElement) {
+                        await document.exitPictureInPicture();
+                        setIsPiPActive(false);
+                        if (pipIntervalRef.current) {
+                            clearInterval(pipIntervalRef.current);
+                        }
+                    } else {
+                        // Setup canvas stream only once
+                        const canvas = canvasRef.current;
+                        canvas.width = 320;
+                        canvas.height = 180;
+                        const stream = canvas.captureStream(30); // 30 fps
+                        videoRef.current.srcObject = stream;
+                        
+                        // Initial draw
+                        updatePiPCanvas();
+                        
+                        await videoRef.current.play();
+                        await videoRef.current.requestPictureInPicture();
+                        setIsPiPActive(true);
+                        
+                        // Update canvas regularly
+                        pipIntervalRef.current = setInterval(() => {
+                            updatePiPCanvas();
+                        }, 100); // Update every 100ms for smooth animation
+                    }
+                } catch (error) {
+                    console.error('PiP error:', error);
+                    alert('Could not activate Picture-in-Picture mode');
+                }
+
+                videoRef.current.addEventListener('leavepictureinpicture', () => {
+                    setIsPiPActive(false);
+                    if (pipIntervalRef.current) {
+                        clearInterval(pipIntervalRef.current);
+                    }
+                }, { once: true });
+            };
 
             const playChime = () => {
                 const context = new (window.AudioContext || window.webkitAudioContext)();
@@ -133,7 +285,7 @@
 
             const updateInterval = (id, field, value) => {
                 setIntervals(intervals.map(int =>
-                    int.id === id ? { ...int, [field]: parseInt(value) || 0 } : int
+                    int.id === id ? { ...int, [field]: parseInt(value) } : int
                 ));
                 if (isRunning) resetTimer();
             };
@@ -142,6 +294,14 @@
                 const mins = Math.floor(seconds / 60);
                 const secs = seconds % 60;
                 return `${mins}:${secs.toString().padStart(2, '0')}`;
+            };
+
+            const generateTimeOptions = (max) => {
+                const options = [];
+                for (let i = 1; i <= max; i++) {
+                    options.push(i);
+                }
+                return options;
             };
 
             const progress = isRestPhase
@@ -156,8 +316,14 @@
                     <div className="max-w-md mx-auto w-full flex-1 flex flex-col relative z-10">
                         <div className="text-center mb-8 mt-4">
                             <h1 className="text-3xl font-light text-white drop-shadow-lg mb-2">Aesthetic Timer</h1>
-                            <p className="text-purple-100 text-sm drop-shadow">Find your peaceful rhythm</p>
-                            <div className="mt-2 text-xs text-purple-200 italic font-light tracking-wide">~ Leena ~</div>
+                            {document.pictureInPictureEnabled && (
+                                <button
+                                    onClick={togglePiP}
+                                    className="mt-2 px-4 py-2 rounded-full bg-white/20 backdrop-blur-sm text-white text-sm hover:bg-white/30 transition-all"
+                                >
+                                    {isPiPActive ? '📺 Exit Widget Mode' : '📱 Enable Widget Mode'}
+                                </button>
+                            )}
                         </div>
 
                         <div className="bg-white/70 backdrop-blur-md rounded-3xl p-8 mb-6 shadow-2xl relative overflow-hidden border border-white/40">
@@ -245,8 +411,11 @@
                                                     type="number"
                                                     value={interval.duration}
                                                     onChange={(e) => updateInterval(interval.id, 'duration', e.target.value)}
-                                                    className="w-full px-3 py-2 rounded-xl border border-purple-200 bg-white/80 text-purple-900 focus:outline-none focus:ring-2 focus:ring-purple-300"
+                                                    className="w-full px-3 py-2 rounded-xl border border-purple-200 bg-white/80 text-purple-900 focus:outline-none focus:ring-2 focus:ring-purple-300 text-center"
                                                     min="1"
+                                                    max="600"
+                                                    pattern="[0-9]*"
+                                                    inputMode="numeric"
                                                 />
                                             </div>
                                             <div>
@@ -257,8 +426,11 @@
                                                     type="number"
                                                     value={interval.rest}
                                                     onChange={(e) => updateInterval(interval.id, 'rest', e.target.value)}
-                                                    className="w-full px-3 py-2 rounded-xl border border-green-200 bg-white/80 text-green-900 focus:outline-none focus:ring-2 focus:ring-green-300"
+                                                    className="w-full px-3 py-2 rounded-xl border border-green-200 bg-white/80 text-green-900 focus:outline-none focus:ring-2 focus:ring-green-300 text-center"
                                                     min="1"
+                                                    max="600"
+                                                    pattern="[0-9]*"
+                                                    inputMode="numeric"
                                                 />
                                             </div>
                                         </div>
